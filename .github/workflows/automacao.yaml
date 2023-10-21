@@ -40,7 +40,7 @@ jobs:
             token = '${{ env.TOKEN }}',
             secret = '${{ env.SECRET }}'
             )
-          rsconnect::deployApp(appDir = "dash_inflacao", forceUpdate = TRUE)
+          rsconnect::deployApp(appDir = "inflacao", forceUpdate = TRUE)
         shell: Rscript {0}
 
       - name: Commit & Push
