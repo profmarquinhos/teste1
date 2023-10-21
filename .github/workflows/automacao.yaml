@@ -29,7 +29,7 @@ jobs:
 
       - name: Atualizar dados
         run: |
-          source("projeto1/R/etl.R")
+          source("inflacao/R/etl.R")
         shell: Rscript {0}
 
       - name: Publicar dashboard
