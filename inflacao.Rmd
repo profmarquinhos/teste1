@@ -1,0 +1,228 @@
+---
+title: "Diagnóstico da Inflação"
+output: 
+  flexdashboard::flex_dashboard:
+   runtime: shiny
+---
+
+
+```{r global, include=FALSE}
+# Carrega pacotes
+library(readr)
+library(lubridate)
+library(shiny)
+library(ggplot2)
+library(dplyr)
+library(tsibble)
+library(fabletools)
+library(feasts)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(Hmisc)
+
+# Carrega dados
+dados <- readr::read_csv("dados_tratados.csv")
+
+```
+
+Column {.sidebar}
+-----------------------------------------------------------------------
+
+Dashboard analítica para diagnosticar o comportamento histórico da inflação brasileira, medida pelos principais indicadores de conjuntura. Utilize as opções abaixo para customização da análise.
+
+
+```{r}
+# Inputs
+shiny::selectInput(
+  inputId = "indicador",
+  label = shiny::strong("indicador"),
+  choices = colnames(dados)[-1],
+  selected='IPCA',
+  multiple = FALSE
+)
+
+shiny::dateRangeInput(
+  inputId="datas",
+  label=shiny::strong("Data inicial e final:"),
+  start=dados$date[1],
+  end=max(dados$date),
+  min=dados$date[1],
+  max=max(dados$date),
+  format="mm/yyyy",
+  startview = "year",
+  language="pt-BR",
+  separator=" - "
+)
+
+shiny::numericInput(
+  inputId="ano",
+  label=shiny::strong("Comparar com o ano"),
+  value=max(lubridate::year(dados$date)),
+  min=min(lubridate::year(dados$date)),
+  max=max(lubridate::year(dados$date)),
+  step=1L
+)
+
+shiny::checkboxGroupInput(
+  inputId="componentes",
+  label=shiny::strong("componentes"),
+  choices=c("% a.m.","Tendência","Sazonalidade","Média"),
+  selected=c("% a.m.","Tendência","Média")
+)
+
+
+```
+
+Dados: FGV e IBGE
+Elaboração: [Sicoob Credisul](https://www.sicoob.com.br/web/sicoobcredisul/para-voce)
+
+Column 
+-----------------------------------------------------------------------
+
+### Gráfico de padrão sazonal {.no-title}
+
+```{r}
+
+prepara_sazonalidade <- shiny::reactive({
+  
+  dados |> 
+    dplyr::select("date", "indicador" = input$indicador) |> 
+    dplyr::filter(date >= input$datas[1] & date <= input$datas[2]) |> 
+    dplyr::group_by(mes = lubridate::month(x = date, label = TRUE, abbr = TRUE)) |> 
+    dplyr::summarise(
+      estatisticas = ggplot2::median_hilow(indicador, conf.int = 0.5)
+      ) |> 
+    tidyr::unnest("estatisticas") |> 
+    dplyr::left_join(
+      y = dados |> 
+        dplyr::select("mes" = "date", "indicador" = input$indicador) |> 
+        dplyr::filter(lubridate::year(mes) == input$ano) |> 
+        dplyr::mutate(
+          mes = lubridate::month(x = mes, label = TRUE, abbr = TRUE)
+          ),
+      by = "mes"
+      ) |> 
+    tidyr::pivot_longer(
+      cols = -c("mes", "ymin", "ymax"),
+      names_to = "variavel",
+      values_to = "valor"
+      ) |> 
+    dplyr::mutate(
+      variavel = dplyr::if_else(
+        variavel == "y", 
+        "Mediana", 
+        as.character(input$ano)
+        )
+      )
+    })
+
+shiny::renderPlot({
+  ggplot2::ggplot(prepara_sazonalidade()) +
+    ggplot2::aes(
+      x = mes, 
+      y = valor, 
+      ymin = ymin,
+      ymax = ymax,
+      color = variavel, 
+      group = variavel
+      ) +
+    ggplot2::geom_ribbon(alpha = 0.25, color = NA) +
+    ggplot2::geom_line() +
+    ggplot2::geom_point(size = 3) +
+    ggplot2::theme_gray(base_size = 16) +
+    ggplot2::labs(
+      title = paste0(input$indicador, ": padrão sazonal"),
+      subtitle = paste0(
+        "% a.m., ", lubridate::year(input$datas[1]), "m",
+        stringr::str_pad(
+          string = lubridate::month(input$datas[1]),
+          width = 2, 
+          side = "left", 
+          pad = 0
+          ),
+        "-", lubridate::year(input$datas[1]), "m",
+        stringr::str_pad(
+          string = lubridate::month(input$datas[2]),
+          width = 2, 
+          side = "left", 
+          pad = 0
+          )
+        ),
+      y = NULL,
+      x = NULL,
+      color = NULL,
+      caption = "Dados: FGV e IBGE | Elaboração:Marquinhos"
+    )
+})
+```
+
+### Gráfico de componentes {.no-title}
+
+```{r}
+
+prepara_componentes <- shiny::reactive({
+  dados |>
+    dplyr::select("date", "indicador" = input$indicador) |>
+    dplyr::filter(date >= input$datas[1] & date <= input$datas[2]) |>
+    dplyr::mutate(date=tsibble::yearmonth(date)) |>
+    tsibble::as_tsibble(index="date") |>
+    tidyr::drop_na() |>
+    fabletools::model(feasts::STL(indicador, robust=TRUE))|>
+    fabletools::components() |>
+    tsibble::as_tsibble() |>
+      dplyr::mutate(
+        date=lubridate::as_date(date),
+      media = mean(indicador)
+      ) |>
+      dplyr::select(
+        "date",
+        "% a.m."="indicador",
+        "Tendência" = "trend",
+        "Sazonalidade" = "season_year",
+        "Média" = "media") |>
+      tidyr::pivot_longer(
+        cols = -"date",
+        names_to = "componentes",
+        values_to = "valor"
+      ) |>
+      dplyr::filter(componentes  %in% input$componentes)
+      
+})
+
+
+shiny::renderPlot({
+  
+  ggplot2::ggplot(prepara_componentes())+
+  ggplot2::aes(x = date, y = valor, color=componentes, group=componentes)+
+  ggplot2::geom_line(linewidth=1)+
+  ggplot2::theme(legend.position="bottom")+
+  ggplot2::labs(
+    title=paste0(input$indicador,": Componentes da série"),
+    subtitle = paste0(
+      "% a.m. ",lubridate::year(input$datas[1]), " m ",
+      stringr::str_pad(
+        string=lubridate::month(input$datas[1]),
+        width=2,
+        side='left',
+        pad=0
+      ),
+      "-", lubridate::year(input$datas[1]), " m ",
+      stringr::str_pad(
+        string=lubridate::month(input$datas[2]),
+        width=2,
+        side='left',
+        pad=0
+      )
+      ),
+    y=NULL,
+    x=NULL,
+    color=NULL,
+    caption="Dados: FGV e IBGE | Elaboração Marquinhos"
+    
+  )
+}
+  
+)
+```
+
